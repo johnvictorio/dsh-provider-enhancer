@@ -1,0 +1,11 @@
+- insert:
+    - id: provider-enhancer
+      name: '@local/provider-enhancer'
+      config:
+        defaultEfforts:
+          - off
+          - minimal
+          - low
+          - medium
+          - high
+        refreshIntervalMinutes: 10

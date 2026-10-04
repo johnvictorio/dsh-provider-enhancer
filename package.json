@@ -1,0 +1,32 @@
+{
+  "name": "@local/provider-enhancer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Auto-updates provider model lists and configures reasoning effort sets per model for pi-ai providers.",
+  "exports": {
+    ".": "./host.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "host.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.4"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-settings-models"]
+    }
+  },
+  "meta": {
+    "title": "Provider Enhancer",
+    "description": "Auto-updates provider model lists and configures reasoning effort sets per model for pi-ai providers."
+  }
+}
