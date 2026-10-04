@@ -340,16 +340,25 @@ export function apply(ctx, config) {
     for (const raw of listing) {
       const id = typeof raw?.id === 'string' ? raw.id : undefined
       if (id === undefined) continue
-      const levels = raw?.reasoning_efforts?.levels
-      if (Array.isArray(levels)) {
-        const { wire, dropped } = translateEfforts(levels, accepted)
+      // Two advertisement shapes read so far: `reasoning_efforts.levels`
+      // (plain tokens) and Charm Hyper's `reasoning.effort_levels`
+      // ({ value, display } rows). Only the token itself travels on the wire.
+      const effortList = raw?.reasoning?.effort_levels ?? raw?.reasoning_efforts?.levels
+      if (Array.isArray(effortList)) {
+        const tokens = effortList
+          .map((entry) => (entry !== null && typeof entry === 'object' ? entry.value : entry))
+          .filter((token) => typeof token === 'string' && token.length > 0)
+        const { wire, dropped } = translateEfforts(tokens, accepted)
         droppedTokens += dropped.length
         if (wire === undefined) {
-          note(`reasoning ${id}: unusable levels ${JSON.stringify(levels)}`)
+          note(`reasoning ${id}: unusable levels ${JSON.stringify(effortList)}`)
           continue
         }
         advertised.set(id, wire)
-      } else if (raw?.capabilities?.reasoning === false) {
+      } else if (raw?.capabilities?.reasoning === false
+        || (raw?.reasoning === undefined && raw?.capabilities !== undefined)) {
+        // An endpoint that describes capabilities but leaves reasoning out is
+        // declaring a non-reasoning model, not an unknown one.
         advertised.set(id, false)
       }
     }
