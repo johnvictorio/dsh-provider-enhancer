@@ -1,6 +1,6 @@
 {
   "name": "dsh-provider-enhancer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "Auto-updates provider model lists and configures reasoning effort sets per model for pi-ai providers.",
