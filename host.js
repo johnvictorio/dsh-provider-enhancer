@@ -200,31 +200,55 @@ export function apply(ctx, config) {
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+  // Optional: the hmr service owns the transaction every configuration write
+  // runs inside. Its AsyncLocalStorage store follows this fiber's async chains
+  // out of the write that triggered them, so a follow-up write started from a
+  // settings event would be refused as nested forever. Its exit() runs work
+  // outside that store. Declared softly, so a deployment without hmr still
+  // runs this plugin — writes simply lose the escape hatch.
+  let hmr
+  try {
+    hmr = ctx.get('hmr')
+  } catch {
+    hmr = undefined
+  }
+  if (hmr === undefined && typeof ctx.inject === 'function') {
+    ctx.inject(['hmr'], (sub) => {
+      hmr = sub.get('hmr')
+    })
+  }
+
   /**
    * Perform one settings write, retrying while the config editor still holds its
    * transaction.
    *
    * A refresh is triggered from inside a configuration write, and the editor
-   * keeps its transaction open until the loader settles — so the follow-up write
-   * (the merged model list, or clearing the request) is refused with "HMR
-   * transactions cannot be nested" unless it waits for that window to close.
+   * rejects any write issued from that event's async chain with "HMR
+   * transactions cannot be nested" — the chain carries the transaction's store
+   * across every await, so retrying in place can never succeed. Each attempt
+   * therefore runs through the hmr service's exit(), which detaches the store;
+   * the write then queues behind the ongoing transaction like any other caller.
    */
   const writeSettled = async (label, write) => {
+    const escape = hmr?.executing && typeof hmr.executing.exit === 'function'
+      ? (work) => hmr.executing.exit(work)
+      : (work) => work()
+    let lastError = ''
     for (let attempt = 0; attempt < 8; attempt++) {
       if (disposed) return false
       try {
-        await write()
+        await escape(write)
         return true
       } catch (error) {
-        const message = String(error?.message ?? error)
-        if (!message.includes('transaction')) {
-          note(`${label}: REFUSED ${message}`)
+        lastError = String(error?.message ?? error)
+        if (!lastError.includes('transaction')) {
+          note(`${label}: REFUSED ${lastError}`)
           return false
         }
         await sleep(150 * (attempt + 1))
       }
     }
-    note(`${label}: the configuration editor never released its transaction`)
+    note(`${label}: write still refused after 8 attempt(s): ${lastError}`)
     return false
   }
 
@@ -400,6 +424,7 @@ export function apply(ctx, config) {
     if (discover && existing === undefined) {
       const overrides = profile?.modelOverrides
       if (overrides !== undefined && Object.keys(overrides).length > 0) {
+        note(`merge ${route}: route declares modelOverrides, so a discovered models list would be rejected; leaving it alone`)
         ctx.logger?.warn?.(`provider-enhancer: route "${route}" declares modelOverrides, so a discovered models list would be rejected; leaving it alone`)
         return false
       }
