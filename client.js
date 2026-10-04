@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@local/provider-enhancer',
+  id: 'dsh-provider-enhancer',
   factory(require) {
     const React = require('react')
     const h = React.createElement

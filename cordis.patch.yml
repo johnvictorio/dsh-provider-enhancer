@@ -1,6 +1,6 @@
 - insert:
     - id: provider-enhancer
-      name: '@local/provider-enhancer'
+      name: dsh-provider-enhancer
       config:
         defaultEfforts:
           - off
