@@ -1,5 +1,5 @@
 {
-  "name": "@local/provider-enhancer",
+  "name": "dsh-provider-enhancer",
   "version": "1.0.0",
   "private": true,
   "type": "module",
