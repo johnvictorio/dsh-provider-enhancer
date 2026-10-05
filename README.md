@@ -6,6 +6,7 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) plug
 
 - **Auto-refreshing model lists.** Gateways add and remove models over time. With `autoUpdateModels` on for a route, the host polls the endpoint through `ctx.llm.discoverModels` and merges the advertised models into that route's list on an interval (default every 10 minutes). Bumping a route's `refreshNonce` requests one immediate refresh.
 - **Per-model reasoning effort.** Each discovered model exposes the thinking levels pi-ai accepts, with the wire spelling the endpoint advertises mapped onto them (including `off`). Set the levels you want per model; the client card writes them through the shared settings forms and the adapter picks changes up per request. Discovery only refreshes the facts an endpoint reports and preserves everything you configured, so your effort sets survive refreshes.
+- **Vision mapping.** An endpoint that states `capabilities.vision` per model (Charm Hyper's listing does) has that fact mapped onto the model entry's `input` modalities in the settings — `true` becomes `text` + `image`, `false` stays `text`-only. It fills gaps only, so a modality list you set by hand is never overwritten.
 - **Blocked models.** Per-route `blocked` ids are never added back by a refresh and are dropped when present.
 
 ## Install

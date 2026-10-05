@@ -19,6 +19,11 @@
  *    including the efforts a user configured — and only refreshes the facts an
  *    endpoint actually reports.
  *
+ * 3. Input modalities. An endpoint that states `capabilities.vision` per model
+ *    has that fact mapped onto the entry's `input` modalities — the only gap-filling
+ *    source for endpoint-listed models, since the adapter's own discovery reads no
+ *    modality facts from a raw listing.
+ *
  * Configuration here is therefore just this plugin's own state: the refresh
  * interval and the per-route auto-update switch plus its refresh request.
  */
@@ -166,6 +171,88 @@ const translateEfforts = (tokens, accepted) => {
   // whatever it had rather than being declared non-reasoning by accident.
   if (!Object.keys(wire).some((level) => level !== 'off')) return { dropped: dropped.length > 0 ? dropped : [...tokens] }
   return { wire, dropped }
+}
+
+/**
+ * Read one raw listing row's per-model facts the adapter can carry:
+ * `vision` maps the endpoint's `capabilities.vision` onto pi-ai's `input`
+ * modalities (`text`/`image` — the union pi-ai accepts), present whenever the
+ * row describes capabilities at all, and `reasoning` carries the translated
+ * effort set, `false` for a row that declares capabilities but no reasoning,
+ * or nothing when the row has no readable reasoning facts (`unusable` marks an
+ * effort list whose tokens mapped to no pi-ai level). `dropped` lists the
+ * reasoning tokens no level received. A row whose capabilities are absent
+ * states no vision fact, leaving the route's default in charge.
+ */
+export function readModelFacts(raw, accepted) {
+  const facts = {}
+  if (raw?.capabilities?.vision === true) facts.vision = ['text', 'image']
+  else if (raw?.capabilities !== undefined) facts.vision = ['text']
+  if (accepted.length > 0) {
+    const effortList = raw?.reasoning?.effort_levels ?? raw?.reasoning_efforts?.levels
+    if (Array.isArray(effortList)) {
+      const tokens = effortList
+        .map((entry) => (entry !== null && typeof entry === 'object' ? entry.value : entry))
+        .filter((token) => typeof token === 'string' && token.length > 0)
+      const { wire, dropped } = translateEfforts(tokens, accepted)
+      facts.dropped = dropped
+      if (wire === undefined) facts.unusable = effortList
+      else facts.reasoning = wire
+    } else if (raw?.capabilities?.reasoning === false
+      || (raw?.reasoning === undefined && raw?.capabilities !== undefined)) {
+      // An endpoint that describes capabilities but leaves reasoning out is
+      // declaring a non-reasoning model, not an unknown one.
+      facts.reasoning = false
+    }
+  }
+  return facts
+}
+
+/**
+ * Merge discovery results into the route's current entries: an entry keeps
+ * every field it already carries (manual fields, reasoning efforts, input
+ * modalities) while the facts an endpoint reports are refreshed, and models
+ * the endpoint advertises that the list does not know yet are appended.
+ *
+ * `facts` carries what the endpoint says per model id — `reasoning` (a level
+ * map, or `false` for a model it declares non-reasoning) and `vision` (the
+ * `input` modalities its capabilities declare). They only ever fill a gap:
+ * an effort set or modality list this user chose is never overwritten.
+ */
+export function mergeModels(existing, discovered, facts, blocked) {
+  const excluded = new Set(Array.isArray(blocked) ? blocked : [])
+  const list = []
+  const byId = new Map()
+  for (const entry of existing ?? []) {
+    if (!entry || typeof entry.id !== 'string' || excluded.has(entry.id)) continue
+    const copy = { ...entry }
+    byId.set(copy.id, copy)
+    list.push(copy)
+  }
+  for (const model of discovered ?? []) {
+    if (!model || typeof model.id !== 'string' || excluded.has(model.id)) continue
+    let entry = byId.get(model.id)
+    if (entry === undefined) {
+      entry = { id: model.id }
+      byId.set(model.id, entry)
+      list.push(entry)
+    }
+    if (typeof model.name === 'string' && model.name.length > 0) entry.name = model.name
+    if (Number.isInteger(model.contextWindow)) entry.contextWindow = model.contextWindow
+    if (Number.isInteger(model.maxTokens)) entry.maxTokens = model.maxTokens
+    if (Array.isArray(model.inputModalities)) entry.input = [...model.inputModalities]
+  }
+  for (const [id, value] of facts?.reasoning ?? []) {
+    const entry = byId.get(id)
+    if (entry === undefined || entry.reasoningEfforts !== undefined) continue
+    entry.reasoningEfforts = value
+  }
+  for (const [id, modalities] of facts?.vision ?? []) {
+    const entry = byId.get(id)
+    if (entry === undefined || entry.input !== undefined) continue
+    entry.input = [...modalities]
+  }
+  return list
 }
 
 export function apply(ctx, config) {
@@ -326,85 +413,37 @@ export function apply(ctx, config) {
     }
   }
 
-  /** What the endpoint says each model's reasoning offers, keyed by model id. */
+  /**
+   * What the endpoint says about each model, keyed by model id: `reasoning`
+   * carries a translated effort set or `false` for a declared non-reasoning
+   * model, and `vision` carries the `input` modalities the row's capabilities
+   * declare. Both are read from the raw listing beside the model, without
+   * disturbing the adapter's own view.
+   */
   const advertisedFor = async (profile) => {
     const listing = await fetchListing(profile)
     if (listing === undefined) return undefined
     const accepted = acceptedLevels(descriptorFor(LLM_NS)?.schema)
     if (accepted.length === 0) {
-      note('listing: the adapter published no level vocabulary, so nothing was translated')
-      return undefined
+      note('listing: the adapter published no level vocabulary, so reasoning facts were not translated')
     }
     const advertised = new Map()
+    const vision = new Map()
     let droppedTokens = 0
     for (const raw of listing) {
       const id = typeof raw?.id === 'string' ? raw.id : undefined
       if (id === undefined) continue
-      // Two advertisement shapes read so far: `reasoning_efforts.levels`
-      // (plain tokens) and Charm Hyper's `reasoning.effort_levels`
-      // ({ value, display } rows). Only the token itself travels on the wire.
-      const effortList = raw?.reasoning?.effort_levels ?? raw?.reasoning_efforts?.levels
-      if (Array.isArray(effortList)) {
-        const tokens = effortList
-          .map((entry) => (entry !== null && typeof entry === 'object' ? entry.value : entry))
-          .filter((token) => typeof token === 'string' && token.length > 0)
-        const { wire, dropped } = translateEfforts(tokens, accepted)
-        droppedTokens += dropped.length
-        if (wire === undefined) {
-          note(`reasoning ${id}: unusable levels ${JSON.stringify(effortList)}`)
-          continue
-        }
-        advertised.set(id, wire)
-      } else if (raw?.capabilities?.reasoning === false
-        || (raw?.reasoning === undefined && raw?.capabilities !== undefined)) {
-        // An endpoint that describes capabilities but leaves reasoning out is
-        // declaring a non-reasoning model, not an unknown one.
-        advertised.set(id, false)
+      const facts = readModelFacts(raw, accepted)
+      if (facts.vision !== undefined) vision.set(id, facts.vision)
+      droppedTokens += facts.dropped?.length ?? 0
+      if (facts.unusable !== undefined) {
+        note(`reasoning ${id}: unusable levels ${JSON.stringify(facts.unusable)}`)
+        continue
       }
+      if (facts.reasoning !== undefined) advertised.set(id, facts.reasoning)
     }
-    note(`listing: ${listing.length} model(s), ${advertised.size} with reasoning facts${droppedTokens > 0 ? `, ${droppedTokens} advertised token(s) had no pi-ai level` : ''}`)
-    return advertised
-  }
-
-  /**
-   * Merge discovery results into the route's current entries: an entry keeps
-   * every field it already carries (manual fields, reasoning efforts) while the
-   * facts an endpoint reports are refreshed, and models the endpoint advertises
-   * that the list does not know yet are appended.
-   *
-   * `advertised` carries what the endpoint says about reasoning per model id —
-   * a level map, or `false` for a model it declares non-reasoning. It only ever
-   * fills a gap: an effort set this user chose is never overwritten.
-   */
-  const mergeModels = (existing, discovered, advertised, blocked) => {
-    const excluded = new Set(Array.isArray(blocked) ? blocked : [])
-    const list = []
-    const byId = new Map()
-    for (const entry of existing ?? []) {
-      if (!entry || typeof entry.id !== 'string' || excluded.has(entry.id)) continue
-      const copy = { ...entry }
-      byId.set(copy.id, copy)
-      list.push(copy)
-    }
-    for (const model of discovered ?? []) {
-      if (!model || typeof model.id !== 'string' || excluded.has(model.id)) continue
-      let entry = byId.get(model.id)
-      if (entry === undefined) {
-        entry = { id: model.id }
-        byId.set(model.id, entry)
-        list.push(entry)
-      }
-      if (typeof model.name === 'string' && model.name.length > 0) entry.name = model.name
-      if (Number.isInteger(model.contextWindow)) entry.contextWindow = model.contextWindow
-      if (Number.isInteger(model.maxTokens)) entry.maxTokens = model.maxTokens
-      if (Array.isArray(model.inputModalities)) entry.input = [...model.inputModalities]
-    }
-    for (const [id, value] of advertised ?? []) {
-      const entry = byId.get(id)
-      if (entry === undefined || entry.reasoningEfforts !== undefined) continue
-      entry.reasoningEfforts = value
-    }
-    return list
+    note(`listing: ${listing.length} model(s), ${advertised.size} with reasoning facts, ${vision.size} with vision facts${droppedTokens > 0 ? `, ${droppedTokens} advertised token(s) had no pi-ai level` : ''}`)
+    return { advertised, vision }
   }
 
   /**
@@ -461,15 +500,16 @@ export function apply(ctx, config) {
       if (disposed) return false
     }
 
-    // Reasoning facts live beside the model in the endpoint's own listing, so
-    // they are read separately and only fill gaps this user has not filled.
-    const advertised = discover ? await advertisedFor(profile) : undefined
+    // Reasoning and vision facts live beside the model in the endpoint's own
+    // listing, so they are read separately and only fill gaps this user has
+    // not filled.
+    const facts = discover ? await advertisedFor(profile) : undefined
     if (disposed) return false
 
     const state = routeState()?.[route] ?? {}
     const blocked = Array.isArray(state.blocked) ? state.blocked : []
     if (blocked.length > 0) note(`merge ${route}: excluding ${blocked.length} blocked model(s)`)
-    const merged = mergeModels(existing, discovered, advertised, blocked)
+    const merged = mergeModels(existing, discovered, facts, blocked)
     if (sameJson(merged, existing ?? [])) {
       note(`merge ${route}: unchanged at ${merged.length} model(s)`)
       return false
