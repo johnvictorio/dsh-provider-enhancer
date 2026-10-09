@@ -29,7 +29,18 @@
  */
 
 import z from '@deepseek-ai/schemastery'
-import { appendFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+/** The running version, stamped into the log so a remote report says what ran. */
+const VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version
+  } catch {
+    return 'unknown'
+  }
+})()
 
 export const name = 'provider-enhancer'
 /**
@@ -48,7 +59,7 @@ export const inject = ['llm', 'settings', 'timer']
  * assistant helping them — can read back. The file stays bounded, truncating
  * once it grows past {@link LOG_LIMIT}.
  */
-const LOG_PATH = '/tmp/provider-enhancer.log'
+const LOG_PATH = join(tmpdir(), 'provider-enhancer.log')
 const LOG_LIMIT = 256 * 1024
 
 /** Append one diagnostic line; a debug log must never break the plugin. */
@@ -260,7 +271,7 @@ export function apply(ctx, config) {
   const timerSvc = ctx.get('timer')
   // Logged before the guard on purpose: a service that failed to resolve leaves
   // no other trace, and "active but doing nothing" is the hardest state to see.
-  note(`apply: llm=${ctx.llm !== undefined} settings=${settings !== undefined} timer=${timerSvc !== undefined}`)
+  note(`apply v${VERSION}: llm=${ctx.llm !== undefined} settings=${settings !== undefined} timer=${timerSvc !== undefined}`)
   if (settings === undefined || ctx.llm === undefined || timerSvc === undefined) return
 
   const descriptorFor = (ns) => {
