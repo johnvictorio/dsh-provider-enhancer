@@ -454,7 +454,7 @@ export function apply(ctx, config) {
       if (facts.reasoning !== undefined) advertised.set(id, facts.reasoning)
     }
     note(`listing: ${listing.length} model(s), ${advertised.size} with reasoning facts, ${vision.size} with vision facts${droppedTokens > 0 ? `, ${droppedTokens} advertised token(s) had no pi-ai level` : ''}`)
-    return { advertised, vision }
+    return { reasoning: advertised, vision }
   }
 
   /**
